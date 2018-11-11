@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"periph.io/x/periph/conn/environment"
 	"periph.io/x/periph/conn/physic"
 )
 
@@ -52,8 +53,8 @@ func TestThermalSensor_fail(t *testing.T) {
 	if s := d.Type(); s != "sysfs-thermal: file I/O is inhibited" {
 		t.Fatal(s)
 	}
-	e := physic.Env{}
-	if err := d.Sense(&e); err == nil || err.Error() != "sysfs-thermal: file I/O is inhibited" {
+	w := environment.Weather{}
+	if err := d.Sense(&w); err == nil || err.Error() != "sysfs-thermal: file I/O is inhibited" {
 		t.Fatal("should have failed")
 	}
 	if _, err := d.SenseContinuous(time.Second); err == nil || err.Error() != "sysfs-thermal: not implemented" {
@@ -136,12 +137,12 @@ func TestThermalSensor_Sense_success(t *testing.T) {
 		}
 	}
 	d := ThermalSensor{name: "cpu", root: "//\000/"}
-	e := physic.Env{}
-	if err := d.Sense(&e); err != nil {
+	w := environment.Weather{}
+	if err := d.Sense(&w); err != nil {
 		t.Fatal(err)
 	}
-	if e.Temperature != 42*physic.Celsius+physic.ZeroCelsius {
-		t.Fatal(e.Temperature)
+	if w.Temperature != 42*physic.Celsius+physic.ZeroCelsius {
+		t.Fatal(w.Temperature)
 	}
 }
 
@@ -160,8 +161,8 @@ func TestThermalSensor_Sense_fail_1(t *testing.T) {
 		}
 	}
 	d := ThermalSensor{name: "cpu", root: "//\000/"}
-	e := physic.Env{}
-	if err := d.Sense(&e); err == nil || err.Error() != "sysfs-thermal: not implemented" {
+	w := environment.Weather{}
+	if err := d.Sense(&w); err == nil || err.Error() != "sysfs-thermal: not implemented" {
 		t.Fatal(err)
 	}
 }
@@ -181,8 +182,8 @@ func TestThermalSensor_Sense_fail_2(t *testing.T) {
 		}
 	}
 	d := ThermalSensor{name: "cpu", root: "//\000/"}
-	e := physic.Env{}
-	if err := d.Sense(&e); err == nil || err.Error() != "sysfs-thermal: failed to read temperature" {
+	w := environment.Weather{}
+	if err := d.Sense(&w); err == nil || err.Error() != "sysfs-thermal: failed to read temperature" {
 		t.Fatal(err)
 	}
 }
@@ -202,8 +203,8 @@ func TestThermalSensor_Sense_fail_3(t *testing.T) {
 		}
 	}
 	d := ThermalSensor{name: "cpu", root: "//\000/"}
-	e := physic.Env{}
-	err := d.Sense(&e)
+	w := environment.Weather{}
+	err := d.Sense(&w)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -232,10 +233,10 @@ func TestThermalSensor_Precision_Kelvin(t *testing.T) {
 		}
 	}
 	d := ThermalSensor{name: "cpu", root: "//\000/"}
-	e := physic.Env{}
-	d.Precision(&e)
-	if e.Temperature != physic.Kelvin {
-		t.Fatal(e.Temperature)
+	w := environment.Weather{}
+	d.Precision(&w)
+	if w.Temperature != physic.Kelvin {
+		t.Fatal(w.Temperature)
 	}
 }
 
@@ -254,10 +255,10 @@ func TestThermalSensor_Precision_MilliKelvin(t *testing.T) {
 		}
 	}
 	d := ThermalSensor{name: "cpu", root: "//\000/"}
-	e := physic.Env{}
-	d.Precision(&e)
-	if e.Temperature != physic.MilliKelvin {
-		t.Fatal(e.Temperature)
+	w := environment.Weather{}
+	d.Precision(&w)
+	if w.Temperature != physic.MilliKelvin {
+		t.Fatal(w.Temperature)
 	}
 }
 
