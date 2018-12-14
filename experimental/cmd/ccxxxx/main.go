@@ -11,6 +11,8 @@ import (
 	"periph.io/x/periph/host"
 )
 
+var send = flag.Bool("send", false, "Whether to send or receive packets")
+
 func main() {
 	flag.Parse()
 	host.Init()
@@ -28,6 +30,10 @@ func main() {
 	}
 
 	dev.Config(ccxxxx.Config_868_3)
+
+	if *send {
+		dev.Send([]byte{})
+	}
 
 	for {
 		packet, err := dev.Receive(-1)

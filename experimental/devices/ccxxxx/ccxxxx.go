@@ -10,6 +10,7 @@ package ccxxxx
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -21,6 +22,9 @@ import (
 const (
 	speed = 5 * physic.MegaHertz
 	bits  = 8
+
+	// Max packet length = length of FIFO buffer - packet length byte - 2 status bytes
+	maxPacketLen = 64 - 1 - 2
 
 	// Read/write flags.
 	writeSingleByte = 0x00
@@ -197,8 +201,7 @@ func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
 		// Rising edge on receiving a packet on GDO0.
 		iocfg0: 0x07,
 
-		// Max packet length = length of FIFO buffer - packet length byte - 2 status bytes
-		pktlen: 64 - 1 - 2,
+		pktlen: maxPacketLen,
 
 		// Enable automatic calibration when going from IDLE -> RX or TX.
 		mcsm0: 0x14,
@@ -266,6 +269,34 @@ func (d *Dev) Receive(timeout time.Duration) (*Packet, error) {
 	return nil, nil
 }
 
+func (d *Dev) Send(data []byte) error {
+	if len(data) > maxPacketLen {
+		return fmt.Errorf(
+				"Packet too long: %d (maximum size: %d)", len(data), maxPacketLen)
+	}
+	// Write the length of the packet to the FIFO buffer.
+	err := d.writeSingleByte(txFifo, byte(len(data)))
+	if err != nil {
+		return err
+	}
+	// Write the contents to the FIFO buffer.
+	err = d.writeBurst(txFifo, data)
+	if err != nil {
+		return err
+	}
+
+	d.gdo2.In(gpio.PullDown, gpio.FallingEdge)
+	defer d.gdo2.In(gpio.PullDown, gpio.NoEdge)
+	// Start transmitting the packet.
+	d.strobe(stx)
+	// Falling edge for end of packet.
+	d.gdo2.WaitForEdge(-1)
+	// Flush the FIFO buffer.
+	d.strobe(sftx)
+	d.strobe(sidle)
+	return nil
+}
+
 // Config sets device registers from a map of address -> value.
 func (d *Dev) Config(config map[byte]byte) error {
 	for k, v := range config {
@@ -304,6 +335,12 @@ func (d *Dev) readBurst(address byte, num byte) ([]byte, error) {
 func (d *Dev) writeSingleByte(address byte, data byte) error {
 	r := []byte{address | writeSingleByte, data}
 	return d.c.Tx(r, nil)
+}
+
+func (d *Dev) writeBurst(address byte, data []byte) error {
+	buf := []byte{address|writeBurst}
+	buf = append(buf, data...)
+	return d.c.Tx(buf, nil)
 }
 
 func (d *Dev) strobe(address byte) error {
