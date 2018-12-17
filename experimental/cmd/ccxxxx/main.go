@@ -5,8 +5,8 @@ import (
 	"flag"
 	"log"
 
-	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/gpio/gpioreg"
+	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/experimental/devices/ccxxxx"
 	"periph.io/x/periph/host"
