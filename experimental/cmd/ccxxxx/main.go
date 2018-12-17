@@ -32,7 +32,7 @@ func main() {
 	dev.Config(ccxxxx.Config_868_3)
 
 	if *send {
-		dev.Send([]byte{})
+		dev.Send([]byte{0x57, 0x16, 0x0a, 0x2e, 0x04, })
 	}
 
 	for {

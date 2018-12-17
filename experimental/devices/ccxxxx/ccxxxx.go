@@ -25,6 +25,7 @@ const (
 
 	// Max packet length = length of FIFO buffer - packet length byte - 2 status bytes
 	maxPacketLen = 64 - 1 - 2
+	sendTimeout  = time.Millisecond
 
 	// Read/write flags.
 	writeSingleByte = 0x00
@@ -162,7 +163,7 @@ func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
 	gdo2.In(gpio.PullDown, gpio.NoEdge)
 	c, err := p.Connect(speed, spi.Mode0, bits)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to CCxxxx over SPI: %v", err)
 	}
 	d := &Dev{
 		c:    c,
@@ -172,17 +173,18 @@ func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
 
 	err = d.strobe(sres)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("failed to reset CCxxxx")
 	}
 
 	ver, err := d.readSingleByte(version)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("failed to read version from CCxxxx")
 	}
 	part, err := d.readSingleByte(partnum)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("failed to read partnum from CCxxxx")
 	}
+	// TODO(hatstand): Explicit support for more variants, e.g. CC2500.
 	if ver != 0x14 || part != 0x00 { // CC1101
 		log.Printf("Found unexpected CCxxx device: version 0x%x partnum: 0x%x", ver, part)
 	}
@@ -255,9 +257,8 @@ func (d *Dev) Receive(timeout time.Duration) (*Packet, error) {
 			rawLQI := status[1] & 0x7f
 			rawCRC := status[1] >> 7
 
-			// Flush the RX buffer afterwards.
-			d.setState(sidle)
-			d.strobe(sfrx)
+			// By default, MCSM1.RXOFF_MODE is set to return to IDLE state automatically.
+
 			return &Packet{
 				Data: packet,
 				RSSI: rssi,
@@ -269,32 +270,40 @@ func (d *Dev) Receive(timeout time.Duration) (*Packet, error) {
 	return nil, nil
 }
 
-func (d *Dev) Send(data []byte) error {
+// Write implements io.Writer.Write by sending a single packet.
+func (d *Dev) Write(p []byte) (int, error) {
+	data := p
 	if len(data) > maxPacketLen {
-		return fmt.Errorf(
-				"Packet too long: %d (maximum size: %d)", len(data), maxPacketLen)
+		data = data[:maxPacketLen]
 	}
 	// Write the length of the packet to the FIFO buffer.
 	err := d.writeSingleByte(txFifo, byte(len(data)))
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("failed to write packet length: %v")
 	}
 	// Write the contents to the FIFO buffer.
 	err = d.writeBurst(txFifo, data)
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("failed to write packet: %v")
 	}
 
 	d.gdo2.In(gpio.PullDown, gpio.FallingEdge)
 	defer d.gdo2.In(gpio.PullDown, gpio.NoEdge)
 	// Start transmitting the packet.
-	d.strobe(stx)
-	// Falling edge for end of packet.
-	d.gdo2.WaitForEdge(-1)
-	// Flush the FIFO buffer.
-	d.strobe(sftx)
-	d.strobe(sidle)
-	return nil
+	if err = d.strobe(stx); err != nil {
+		return 0, fmt.Errorf("failed to transmit packet: %v", err)
+	}
+
+	// Falling edge for end of packet send.
+	if !d.gdo2.WaitForEdge(sendTimeout) {
+		return 0, fmt.Errorf("failed to send packet after %v", sendTimeout)
+	}
+	// By default, MCSM1.TXOFF_MODE is set to return to IDLE state automatically.
+	if len(data) == len(p) {
+		return len(data), nil
+	} else {
+		return len(data), fmt.Errorf("buffer size larger than maximum packet length of %d", maxPacketLen)
+	}
 }
 
 // Config sets device registers from a map of address -> value.
@@ -302,7 +311,7 @@ func (d *Dev) Config(config map[byte]byte) error {
 	for k, v := range config {
 		err := d.writeSingleByte(k, v)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to configure register %d: %v", k, err)
 		}
 	}
 	return nil
@@ -338,7 +347,7 @@ func (d *Dev) writeSingleByte(address byte, data byte) error {
 }
 
 func (d *Dev) writeBurst(address byte, data []byte) error {
-	buf := []byte{address|writeBurst}
+	buf := []byte{address | writeBurst}
 	buf = append(buf, data...)
 	return d.c.Tx(buf, nil)
 }
@@ -358,6 +367,7 @@ func (d *Dev) setState(state byte) error {
 		return err
 	}
 	// Worst case state change is ~1ms for IDLE -> RX with calibration.
+	// See Table 34 in datasheet.
 	time.Sleep(1 * time.Millisecond)
 	return nil
 }
