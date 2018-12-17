@@ -583,7 +583,7 @@ func (d *Dev) OscillatorFrequency() (physic.Frequency, error) {
 }
 
 func frequency(xosc physic.Frequency, freq []byte) physic.Frequency {
-	f := int64(freq[0]) << 16 | int64(freq[1]) << 8 | int64(freq[2])
+	f := int64(freq[0])<<16 | int64(freq[1])<<8 | int64(freq[2])
 	return physic.Frequency((int64(xosc) >> 16) * f)
 }
 
