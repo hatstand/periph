@@ -13,3 +13,10 @@ func TestCCxxxx_calculateFreq(t *testing.T) {
 		t.Fatalf("calculateFreq() = %v != %v", f, 0x21656a)
 	}
 }
+
+func TestCCxxxx_calculateDeviatn(t *testing.T) {
+	d := calculateDeviatn(26 * physic.MegaHertz, 40 * physic.KiloHertz)
+	if d != 0x45 {
+		t.Fatalf("calculateDeviatn() = %v != %v", d, 0x45)
+	}
+}
