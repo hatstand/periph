@@ -30,20 +30,11 @@ func main() {
 		log.Fatalf("ccxxxx: %v", err)
 	}
 
-	dev.Config(ccxxxx.Config_868_3)
 	freq, err := dev.OscillatorFrequency()
 	if err != nil {
 		log.Fatalf("Failed to get XOSC: %v", err)
 	}
 	log.Printf("XOSC: %v", freq)
-
-	f, err := dev.Frequency()
-	if err != nil {
-		log.Fatalf("Failed to get configured frequency: %v", err)
-	}
-	log.Printf("Configured FREQ: %v", f)
-	carrier := physic.Frequency(int64(freq) / (1 << 16) * int64(f))
-	log.Printf("Carrier: %v", carrier)
 
 	dev.SetDeviation(40 * physic.KiloHertz)
 	dev.SetFrequency(868300 * physic.KiloHertz)

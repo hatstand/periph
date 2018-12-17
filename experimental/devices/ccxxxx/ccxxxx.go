@@ -582,17 +582,17 @@ func (d *Dev) OscillatorFrequency() (physic.Frequency, error) {
 	return freq, nil
 }
 
-func (d *Dev) Frequency() (int, error) {
+func frequency(xosc physic.Frequency, freq []byte) physic.Frequency {
+	f := int64(freq[0]) << 16 | int64(freq[1]) << 8 | int64(freq[2])
+	return physic.Frequency((int64(xosc) >> 16) * f)
+}
+
+func (d *Dev) Frequency() (physic.Frequency, error) {
 	freq, err := d.readBurst(freq2, 3)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read frequency configuration: %v", err)
 	}
-	f := int(freq[0])<<16 | int(freq[1])<<8 | int(freq0)
-	return f, nil
-}
-
-func frequency(xosc physic.Frequency, target physic.Frequency) {
-
+	return frequency(d.oscillator, freq), nil
 }
 
 func convertRSSI(raw int) int {
