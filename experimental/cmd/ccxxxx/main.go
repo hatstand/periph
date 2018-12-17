@@ -32,16 +32,19 @@ func main() {
 	dev.Config(ccxxxx.Config_868_3)
 
 	if *send {
-		dev.Send([]byte{0x57, 0x16, 0x0a, 0x2e, 0x04, })
-	}
-
-	for {
-		packet, err := dev.Receive(-1)
+		_, err := dev.Write([]byte{0x57, 0x16, 0x0a, 0x2e, 0x04})
 		if err != nil {
-			log.Printf("Error receiving packet: %v", err)
-		} else {
-			log.Printf("RSSI: %d LQI %d CRC: %v", packet.RSSI, packet.LQI, packet.CRC)
-			log.Println(hex.Dump(packet.Data))
+			log.Fatalf("Failed to send packet: %v", err)
+		}
+	} else {
+		for {
+			packet, err := dev.Receive(-1)
+			if err != nil {
+				log.Printf("Error receiving packet: %v", err)
+			} else {
+				log.Printf("RSSI: %d LQI %d CRC: %v", packet.RSSI, packet.LQI, packet.CRC)
+				log.Println(hex.Dump(packet.Data))
+			}
 		}
 	}
 }
