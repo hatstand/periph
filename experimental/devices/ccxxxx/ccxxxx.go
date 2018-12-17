@@ -258,7 +258,7 @@ func (d *Dev) SetFrequency(freq physic.Frequency) error {
 }
 
 func calculateDeviatn(xosc physic.Frequency, target physic.Frequency) byte {
-	c := int(xosc) >> 17
+	c := int64(xosc) >> 17
 
 	// DEVIATN is an unsigned float with a 3 bit mantissa and a 3 bit exponent
 	// with a bias of 8.
@@ -269,8 +269,8 @@ func calculateDeviatn(xosc physic.Frequency, target physic.Frequency) byte {
 	candDistance := math.MaxFloat64
 	for m := byte(0); m < 8; m++ {
 		for e := byte(0); e < 8; e++ {
-			val := (1 << uint(e)) * (8 + int(m))
-			dist := int(target/physic.Hertz) - c*int(val)
+			val := c * (8 + int64(m)) * (int64(1) << e)
+			dist := int64(target) - val
 			if math.Abs(float64(dist)) < candDistance {
 				mant = m
 				exp = e
@@ -380,12 +380,12 @@ func (d *Dev) Write(p []byte) (int, error) {
 	// Write the length of the packet to the FIFO buffer.
 	err = d.writeSingleByte(txFifo, byte(len(data)))
 	if err != nil {
-		return 0, fmt.Errorf("failed to write packet length: %v")
+		return 0, fmt.Errorf("failed to write packet length: %v", err)
 	}
 	// Write the contents to the FIFO buffer.
 	err = d.writeBurst(txFifo, data)
 	if err != nil {
-		return 0, fmt.Errorf("failed to write packet: %v")
+		return 0, fmt.Errorf("failed to write packet: %v", err)
 	}
 	d.gdo2.In(gpio.PullDown, gpio.FallingEdge)
 	defer d.gdo2.In(gpio.PullDown, gpio.NoEdge)
