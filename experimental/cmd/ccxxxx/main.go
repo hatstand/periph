@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 
+	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/gpio/gpioreg"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/experimental/devices/ccxxxx"
@@ -30,9 +31,26 @@ func main() {
 	}
 
 	dev.Config(ccxxxx.Config_868_3)
+	freq, err := dev.OscillatorFrequency()
+	if err != nil {
+		log.Fatalf("Failed to get XOSC: %v", err)
+	}
+	log.Printf("XOSC: %v", freq)
+
+	f, err := dev.Frequency()
+	if err != nil {
+		log.Fatalf("Failed to get configured frequency: %v", err)
+	}
+	log.Printf("Configured FREQ: %v", f)
+	carrier := physic.Frequency(int64(freq) / (1 << 16) * int64(f))
+	log.Printf("Carrier: %v", carrier)
+
+	dev.SetDeviation(40 * physic.KiloHertz)
+	dev.SetFrequency(868300 * physic.KiloHertz)
 
 	if *send {
-		_, err := dev.Write([]byte{0x57, 0x16, 0x0a, 0x2e, 0x04})
+		log.Println("Sending packet")
+		_, err := dev.Write([]byte{0x57, 0x16, 0x0a, 0x2e, 0x04, 0x05, 60, 60, 20})
 		if err != nil {
 			log.Fatalf("Failed to send packet: %v", err)
 		}

@@ -9,9 +9,11 @@
 package ccxxxx
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"periph.io/x/periph/conn/gpio"
@@ -25,7 +27,6 @@ const (
 
 	// Max packet length = length of FIFO buffer - packet length byte - 2 status bytes
 	maxPacketLen = 64 - 1 - 2
-	sendTimeout  = time.Millisecond
 
 	// Read/write flags.
 	writeSingleByte = 0x00
@@ -123,6 +124,9 @@ const (
 	test2   = 0x2c
 	test1   = 0x2d
 	test0   = 0x2e
+
+	// Oscillator output configs for GDOx pins.
+	clkXosc192 = 0x3f
 )
 
 // Generated with SmartRF Studio (http://www.ti.com/tool/SMARTRFTM-STUDIO).
@@ -154,11 +158,32 @@ var Config_868_3 = map[byte]byte{
 	fscal0:   0x1f,
 }
 
+type Modulation int
+
+const (
+	FSK_2 = 0
+	GFSK  = 1
+	ASK   = 3
+	FSK_4 = 4
+	MSK   = 7
+)
+
+type Options struct {
+	// Oscillator is the frequency of the attached oscillator (usually 26Mhz or 27Mhz).
+	Oscillator physic.Frequency
+}
+
+func DefaultOptions() Options {
+	return Options{
+		Oscillator: physic.Frequency(26) * physic.MegaHertz,
+	}
+}
+
 // Datasheet:
 // http://www.ti.com/lit/ds/symlink/cc1101.pdf
 
-// New returns a handle to a CCxxxx device.
-func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
+// NewWithOptions returns a handle to a CCxxxx device.
+func NewWithOptions(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn, opts Options) (*Dev, error) {
 	gdo0.In(gpio.PullDown, gpio.NoEdge)
 	gdo2.In(gpio.PullDown, gpio.NoEdge)
 	c, err := p.Connect(speed, spi.Mode0, bits)
@@ -166,9 +191,10 @@ func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
 		return nil, fmt.Errorf("failed to connect to CCxxxx over SPI: %v", err)
 	}
 	d := &Dev{
-		c:    c,
-		gdo0: gdo0,
-		gdo2: gdo2,
+		c:          c,
+		gdo0:       gdo0,
+		gdo2:       gdo2,
+		oscillator: opts.Oscillator,
 	}
 
 	err = d.strobe(sres)
@@ -212,6 +238,11 @@ func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
 	return d, nil
 }
 
+// New returns a handle to a CCxxxx device.
+func New(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn) (*Dev, error) {
+	return NewWithOptions(p, gdo0, gdo2, DefaultOptions())
+}
+
 // Dev is a handle to the device.
 type Dev struct {
 	c spi.Conn
@@ -219,6 +250,50 @@ type Dev struct {
 	gdo0 gpio.PinIn
 	// Emits rising edge then faling edge when sending a packet by default.
 	gdo2 gpio.PinIn
+
+	oscillator physic.Frequency
+}
+
+func (d *Dev) SetFrequency(freq physic.Frequency) error {
+	f := int64(freq) / (int64(d.oscillator) >> 16)
+	enc := make([]byte, 4)
+	binary.BigEndian.PutUint32(enc, uint32(f))
+	log.Printf("Setting FREQ[2:0] to: %x", f)
+	return d.writeBurst(freq2, enc[1:])
+}
+
+// SetDeviation sets the modem deviation setting (DEVIATN).
+func (d *Dev) SetDeviation(freq physic.Frequency) error {
+	c := int(d.oscillator) >> 17
+
+	// DEVIATN is an unsigned float with a 3 bit mantissa and a 3 bit exponent
+	// with a bias of 8.
+	// The simplest way to convert an integer frequency into this float format
+	// is to just try all of them and use the nearest as there are only 2^6.
+	mant := byte(0)
+	exp := byte(0)
+	candDistance := float64((8 + 7) * (1 << 7))
+	for m := byte(0); m < 8; m++ {
+		for e := byte(0); e < 8; e++ {
+			val := (1 << uint(e)) * (8 + int(m))
+			dist := int(freq/physic.Hertz) - c*int(val)
+			if math.Abs(float64(dist)) < candDistance {
+				mant = m
+				exp = e
+				candDistance = math.Abs(float64(dist))
+			}
+		}
+	}
+	return d.writeSingleByte(deviatn, (exp<<4)|mant)
+}
+
+func (d *Dev) SetModulation(mod Modulation) error {
+	cfg, err := d.readSingleByte(mdmcfg2)
+	if err != nil {
+		return fmt.Errorf("failed to read MDMCFG2: %v", err)
+	}
+
+	return d.writeSingleByte(mdmcfg2, cfg|(byte(mod)<<4))
 }
 
 // Packet represents a single received packet with metadata.
@@ -227,6 +302,27 @@ type Packet struct {
 	RSSI int
 	LQI  int
 	CRC  bool
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// Read implements io.Reader.Read by receiving a single packet.
+func (d *Dev) Read(p []byte) (int, error) {
+	packet, err := d.Receive(-1)
+	if err != nil {
+		return 0, err
+	}
+	l := min(len(p), len(packet.Data))
+	for i := 0; i < l; i++ {
+		p[i] = packet.Data[i]
+	}
+	// TODO(hatstand): Internally buffer when len(p) < len(packet.Data).
+	return l, nil
 }
 
 // Receive waits for timeout for a single packet to arrive.
@@ -276,8 +372,13 @@ func (d *Dev) Write(p []byte) (int, error) {
 	if len(data) > maxPacketLen {
 		data = data[:maxPacketLen]
 	}
+	// Estimate how long it will take to send this packet.
+	timeout, err := d.packetTimeout(len(data))
+	if err != nil {
+		return 0, err
+	}
 	// Write the length of the packet to the FIFO buffer.
-	err := d.writeSingleByte(txFifo, byte(len(data)))
+	err = d.writeSingleByte(txFifo, byte(len(data)))
 	if err != nil {
 		return 0, fmt.Errorf("failed to write packet length: %v")
 	}
@@ -286,7 +387,6 @@ func (d *Dev) Write(p []byte) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to write packet: %v")
 	}
-
 	d.gdo2.In(gpio.PullDown, gpio.FallingEdge)
 	defer d.gdo2.In(gpio.PullDown, gpio.NoEdge)
 	// Start transmitting the packet.
@@ -295,8 +395,9 @@ func (d *Dev) Write(p []byte) (int, error) {
 	}
 
 	// Falling edge for end of packet send.
-	if !d.gdo2.WaitForEdge(sendTimeout) {
-		return 0, fmt.Errorf("failed to send packet after %v", sendTimeout)
+	log.Printf("Send timeout: %v", timeout)
+	if !d.gdo2.WaitForEdge(timeout) {
+		return 0, fmt.Errorf("failed to send packet after %v", timeout)
 	}
 	// By default, MCSM1.TXOFF_MODE is set to return to IDLE state automatically.
 	if len(data) == len(p) {
@@ -315,6 +416,18 @@ func (d *Dev) Config(config map[byte]byte) error {
 		}
 	}
 	return nil
+}
+
+func (d *Dev) ReadConfig() (map[byte]byte, error) {
+	values, err := d.readBurst(iocfg2, test0-iocfg2+1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config: %v", err)
+	}
+	ret := make(map[byte]byte)
+	for i := byte(iocfg2); i < test0+1; i++ {
+		ret[i] = values[i]
+	}
+	return ret, nil
 }
 
 func (d *Dev) readSingleByte(address byte) (byte, error) {
@@ -382,6 +495,104 @@ func (d *Dev) setRX() error {
 		return err
 	}
 	return nil
+}
+
+// dataRateMantissa gets MDMCFG4.DRATE_M
+func (d *Dev) dataRateMantissa() (uint, error) {
+	cfg, err := d.readSingleByte(mdmcfg3)
+	if err != nil {
+		return 0, err
+	}
+	return uint(cfg) | (1 << 9), nil
+}
+
+// dataRateExponent gets MDMCFG3.DRATE_E
+func (d *Dev) dataRateExponent() (uint, error) {
+	cfg, err := d.readSingleByte(mdmcfg4)
+	if err != nil {
+		return 0, err
+	}
+	return uint(cfg) & 0x0f, nil
+}
+
+func (d *Dev) dataRate() (uint64, error) {
+	mantissa, err := d.dataRateMantissa()
+	if err != nil {
+		return 0, err
+	}
+	exponent, err := d.dataRateExponent()
+	if err != nil {
+		return 0, err
+	}
+	return uint64(float64((256+mantissa)*(1<<exponent)) / (1 << 28) * 26 * 1000 * 1000), nil
+}
+
+// packetTimeout calculates a rough estimate of how long it should take to transmit a packet.
+func (d *Dev) packetTimeout(length int) (time.Duration, error) {
+	rate, err := d.dataRate()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get data rate: %v", err)
+	}
+	bits := length * 8
+	msec := float64(bits) / float64(rate) * 1000
+	// Estimate as bits / baud rate + 150ms
+	return time.Duration(msec)*time.Millisecond + 150*time.Millisecond, nil
+}
+
+// OscillatorFrequency estimates the frequency of XOSC by sampling GDO0
+// configured to output XOSC/192.
+func (d *Dev) OscillatorFrequency() (physic.Frequency, error) {
+	log.Printf("Estimating oscillator frequency...")
+	orig, err := d.readSingleByte(iocfg0)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read IOCFG0: %v", err)
+	}
+	err = d.writeSingleByte(iocfg0, 0x3f) // CLK_XOSC/192
+	if err != nil {
+		return 0, fmt.Errorf("failed to set GDO0 to CLK_XOSC/192")
+	}
+	defer d.writeSingleByte(iocfg0, orig)
+
+	// Raspberry Pi Zero can sample at ~3.75Mhz which is enough to recover a
+	// 26Mhz clock when divided by 192
+	d.gdo0.In(gpio.PullDown, gpio.NoEdge)
+	samples := 10000000
+	data := make([]gpio.Level, samples)
+	t := time.Now()
+	for i := 0; i < samples; i++ {
+		data[i] = d.gdo0.Read()
+	}
+	t1 := time.Now()
+	avgSampleDuration := float64(t1.Sub(t).Nanoseconds()) / float64(samples)
+	log.Printf("Sampling frequency: %v", physic.PeriodToFrequency(time.Duration(avgSampleDuration)))
+
+	cma := 0.0
+	lastEdge := 0
+	count := 0
+	for i := 1; i < samples; i++ {
+		if data[i] != data[i-1] {
+			period := i - lastEdge
+			cma = (float64(period) + float64(count)*cma) / float64(count+1)
+			lastEdge = i
+			count++
+		}
+	}
+	period := time.Duration(cma*avgSampleDuration) * 2
+	freq := physic.PeriodToFrequency(period) * 192
+	return freq, nil
+}
+
+func (d *Dev) Frequency() (int, error) {
+	freq, err := d.readBurst(freq2, 3)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read frequency configuration: %v", err)
+	}
+	f := int(freq[0])<<16 | int(freq[1])<<8 | int(freq0)
+	return f, nil
+}
+
+func frequency(xosc physic.Frequency, target physic.Frequency) {
+
 }
 
 func convertRSSI(raw int) int {
