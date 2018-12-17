@@ -47,6 +47,7 @@ func main() {
 
 	dev.SetDeviation(40 * physic.KiloHertz)
 	dev.SetFrequency(868300 * physic.KiloHertz)
+	dev.SetModulation(ccxxxx.FSK_2)
 
 	if *send {
 		log.Println("Sending packet")

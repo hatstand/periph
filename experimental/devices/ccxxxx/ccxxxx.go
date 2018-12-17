@@ -134,28 +134,19 @@ const (
 // Modulation: 2-FSK
 // Manchester encoding disabled
 var Config_868_3 = map[byte]byte{
-	fsctrl1:  0x06,
-	fsctrl0:  0x00,
-	freq2:    0x21,
-	freq1:    0x65,
-	freq0:    0x44,
-	mdmcfg4:  0xf5,
-	mdmcfg3:  0x83,
-	mdmcfg2:  0x03,
-	mdmcfg1:  0x22,
-	mdmcfg0:  0xf8,
-	deviatn:  0x34,
-	foccfg:   0x16,
-	bscfg:    0x6c,
-	agcctrl2: 0x03,
-	agcctrl1: 0x40,
-	agcctrl0: 0x91,
-	frend1:   0x56,
-	frend0:   0x10,
-	fscal3:   0xe9,
-	fscal2:   0x2a,
-	fscal1:   0x00,
-	fscal0:   0x1f,
+	fsctrl1: 0x06,
+	fsctrl0: 0x00,
+	mdmcfg4: 0xf5,
+	mdmcfg3: 0x83,
+	mdmcfg2: 0x03,
+	mdmcfg1: 0x22,
+	mdmcfg0: 0xf8,
+	deviatn: 0x34,
+	foccfg:  0x16,
+	fscal3:  0xe9,
+	fscal2:  0x2a,
+	fscal1:  0x00,
+	fscal0:  0x1f,
 }
 
 type Modulation int
@@ -175,7 +166,7 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Oscillator: physic.Frequency(26) * physic.MegaHertz,
+		Oscillator: 26 * physic.MegaHertz,
 	}
 }
 
@@ -254,17 +245,20 @@ type Dev struct {
 	oscillator physic.Frequency
 }
 
-func (d *Dev) SetFrequency(freq physic.Frequency) error {
-	f := int64(freq) / (int64(d.oscillator) >> 16)
+func calculateFreq(xosc physic.Frequency, target physic.Frequency) []byte {
+	f := int64(target) / (int64(xosc) >> 16)
 	enc := make([]byte, 4)
 	binary.BigEndian.PutUint32(enc, uint32(f))
-	log.Printf("Setting FREQ[2:0] to: %x", f)
+	return enc[1:]
+}
+
+func (d *Dev) SetFrequency(freq physic.Frequency) error {
+	enc := calculateFreq(d.oscillator, freq)
 	return d.writeBurst(freq2, enc[1:])
 }
 
-// SetDeviation sets the modem deviation setting (DEVIATN).
-func (d *Dev) SetDeviation(freq physic.Frequency) error {
-	c := int(d.oscillator) >> 17
+func calculateDeviatn(xosc physic.Frequency, target physic.Frequency) byte {
+	c := int(xosc) >> 17
 
 	// DEVIATN is an unsigned float with a 3 bit mantissa and a 3 bit exponent
 	// with a bias of 8.
@@ -272,11 +266,11 @@ func (d *Dev) SetDeviation(freq physic.Frequency) error {
 	// is to just try all of them and use the nearest as there are only 2^6.
 	mant := byte(0)
 	exp := byte(0)
-	candDistance := float64((8 + 7) * (1 << 7))
+	candDistance := math.MaxFloat64
 	for m := byte(0); m < 8; m++ {
 		for e := byte(0); e < 8; e++ {
 			val := (1 << uint(e)) * (8 + int(m))
-			dist := int(freq/physic.Hertz) - c*int(val)
+			dist := int(target/physic.Hertz) - c*int(val)
 			if math.Abs(float64(dist)) < candDistance {
 				mant = m
 				exp = e
@@ -284,9 +278,15 @@ func (d *Dev) SetDeviation(freq physic.Frequency) error {
 			}
 		}
 	}
-	return d.writeSingleByte(deviatn, (exp<<4)|mant)
+	return (exp << 4) | mant
 }
 
+// SetDeviation sets the frequency deviation setting (DEVIATN) for FSK schemes.
+func (d *Dev) SetDeviation(freq physic.Frequency) error {
+	return d.writeSingleByte(deviatn, calculateDeviatn(d.oscillator, freq))
+}
+
+// SetModulation sets the modulation format for sending and receiving.
 func (d *Dev) SetModulation(mod Modulation) error {
 	cfg, err := d.readSingleByte(mdmcfg2)
 	if err != nil {
@@ -564,8 +564,8 @@ func (d *Dev) OscillatorFrequency() (physic.Frequency, error) {
 	}
 	t1 := time.Now()
 	avgSampleDuration := float64(t1.Sub(t).Nanoseconds()) / float64(samples)
-	log.Printf("Sampling frequency: %v", physic.PeriodToFrequency(time.Duration(avgSampleDuration)))
 
+	// Calculate moving average of how many periods since last edge.
 	cma := 0.0
 	lastEdge := 0
 	count := 0
