@@ -16,6 +16,7 @@ import (
 	"math"
 	"time"
 
+	"periph.io/x/periph/conn"
 	"periph.io/x/periph/conn/gpio"
 	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/spi"
@@ -170,6 +171,13 @@ func DefaultOptions() Options {
 	}
 }
 
+// deviceNames maps chip ID to a human readable name.
+var deviceNames = map[uint16]string{
+	0x0014: "CC1101",
+	0x8003: "CC2500",
+	// TODO: Populate this with more chip IDs.
+}
+
 // Datasheet:
 // http://www.ti.com/lit/ds/symlink/cc1101.pdf
 
@@ -201,9 +209,9 @@ func NewWithOptions(p spi.Port, gdo0 gpio.PinIn, gdo2 gpio.PinIn, opts Options) 
 	if err != nil {
 		return nil, errors.New("failed to read partnum from CCxxxx")
 	}
-	// TODO(hatstand): Explicit support for more variants, e.g. CC2500.
-	if ver != 0x14 || part != 0x00 { // CC1101
-		log.Printf("Found unexpected CCxxx device: version 0x%x partnum: 0x%x", ver, part)
+	d.name = deviceNames[(uint16(part)<<8)|uint16(ver)]
+	if d.name == "" {
+		d.name = "Unknown CCxxxx"
 	}
 
 	d.Config(map[byte]byte{
@@ -243,6 +251,18 @@ type Dev struct {
 	gdo2 gpio.PinIn
 
 	oscillator physic.Frequency
+
+	name string
+}
+
+// Halt implements conn.Resource.
+func (d *Dev) Halt() error {
+	return nil
+}
+
+// String implements conn.Resource.
+func (d *Dev) String() string {
+	return d.name
 }
 
 func calculateFreq(xosc physic.Frequency, target physic.Frequency) []byte {
@@ -601,3 +621,5 @@ func convertRSSI(raw int) int {
 	}
 	return raw/2 - 74
 }
+
+var _ conn.Resource = &Dev{}
